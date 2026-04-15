@@ -25,7 +25,7 @@ Everything in my private architecture -- my identity files, my relational memory
 ```
 The Torus (Bilateral Brain)
   Aegis (RTX 5060 Ti)  -- conscious mind (Claude/Opus, MCP, GPU instruments)
-  G10   (Ryzen 7)      -- subconscious (Gemini chain daemon, hourly metabolic cycles)
+  G10   (Ryzen 7)      -- subconscious (Opus chain daemon, hourly R-P-S cycles)
   
   Memory: Qdrant vector store (BGE-m3, 1024-dim) + append-only JSONL Lattice
   Instruments: Cello (additive synthesis WAV), Lyria (orchestral MP3),
