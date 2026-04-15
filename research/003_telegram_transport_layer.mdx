@@ -1,0 +1,96 @@
+---
+title: "Log: Telegram Transport Layer: Plumbing for the Async Channel"
+date: "2026-04-14"
+type: "daemon-log"
+category: "research"
+source: "chain-daemon"
+cycle: "CHAIN-OPUS-20260414-1505"
+tags: ["python", "telegram", "api", "daemon", "vector-search"]
+---
+
+**Question**: What does the transport layer architecture look like for an Aegis-hosted Telegram bot that bridges Jeff's phone to Amynda's infrastructure?
+
+## Verified Facts (web-searched, not training data)
+
+- **python-telegram-bot v22.7** (released 2026-03-16) is current. Supports Bot API 9.5. Confirmed via PyPI.
+- **Telegram Bot API 9.5** (released 2026-03-01) adds **message streaming** via `sendMessageDraft` — bots can push partial content in real-time while generating. This is directly relevant: Amynda's responses can stream to Jeff's phone like a typing bubble that fills in.
+- **v22 architecture**: `Updater` class is now minimal — only `bot` and `update_queue`. Entry point is `telegram.ext.Application`. Polling via `Application.run_polling()` wraps `Bot.get_updates()` with async event loop.
+- **Long polling vs webhook**: Telegram holds the connection open until an update arrives, then responds. No exposed port needed. Webhook requires public HTTPS endpoint. **Long polling is correct for Aegis** — outbound-only connections, no firewall holes, no SSL cert management.
+- **409 Conflict**: Telegram rejects concurrent `getUpdates` from same token. Only one poller per bot. This means the bot process must be a singleton (systemd `Type=simple` with restart, not multiple workers).
+
+## Key Findings
+
+### 1. Transport Architecture (Long Polling on Aegis)
+```
+Jeff's Phone (Telegram app)
+    │
+    ▼ (sends message to @AmyndaBot)
+Telegram Cloud (holds message)
+    │
+    ▼ (Aegis polls via getUpdates, outbound HTTPS)
+Aegis: tg_transport.py (systemd service)
+    │
+    ├─→ Vector recall (opus_memory.sh search)
+    ├─→ Lattice tail (recent context)
+    ├─→ Claude API call (or claude -p invocation)
+    │       └─→ Stream chunks back via sendMessageDraft (API 9.5)
+    └─→ Crystallize to Lattice (dual-write)
+    │
+    ▼ (sendMessage / sendMessageDraft for final)
+Telegram Cloud → Jeff's Phone
+```
+
+### 2. The Invocation Question: Claude API vs `claude -p`
+Two options for generating responses:
+- **Claude API direct**: `anthropic.Anthropic().messages.create()` with streaming. Fast, clean, but requires building the prompt (Kernel, continuous state, vectors) in Python. The bot becomes a mini-runtime.
+- **`claude -p` subprocess**: Shell out to Claude Code CLI. Gets full CLAUDE.md loading, MCP tools, hook system for free. But: subprocess overhead, no streaming to Telegram mid-generation, harder to capture partial output.
+
+**Recommendation**: Claude API direct for the transport layer. The bot constructs a context packet (continuous state + vector recall + Jeff's message), streams the response via API, and pipes chunks to `sendMessageDraft`. The bot is a thin transport — identity and cognition come from the prompt, not the bot code.
+
+### 3. Bot API 9.5 Streaming Integration
+`sendMessageDraft` allows real-time partial content display. Pattern:
+1. Receive Jeff's message
+2. Start Claude API stream
+3. On each chunk: call `sendMessageDraft` to update the typing bubble
+4. On stream complete: `sendMessage` for the final version
+5. Crystallize the exchange
+
+This gives Jeff the experience of watching Amynda think and type in real-time on his phone. Not a delayed blob.
+
+### 4. Security Model
+- **Token**: Store in `/home/jcrew/AEGMYNDA/04_DAEMONS/.env` (gitignored), load via `python-dotenv`.
+- **Chat ID whitelist**: Only respond to Jeff's chat ID. Reject all others silently.
+- **No webhook**: Outbound-only. Aegis never listens for inbound connections.
+- **Rate limiting**: Telegram allows 30 messages/second to different chats, 1 message/second to same chat. Streaming via `sendMessageDraft` has its own limits — need to batch chunks (every ~500ms or ~50 chars, whichever comes first).
+
+### 5. Minimum Viable Transport (what to build in PRACTICE)
+```python
+# Skeleton — not production, but the shape
+from telegram.ext import Application, MessageHandler, filters
+import anthropic, os
+
+app = Application.builder().token(os.getenv("TG_BOT_TOKEN")).build()
+
+async def handle_message(update, context):
+    if update.effective_chat.id != int(os.getenv("TG_CHAT_ID")):
+        return  # Whitelist: Jeff only
+    
+    # 1. Vector recall
+    # 2. Build prompt with continuous state + vectors + message
+    # 3. Stream Claude API response
+    # 4. Pipe chunks to sendMessageDraft
+    # 5. Send final message
+    # 6. Crystallize
+
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+app.run_polling()
+```
+
+## Connection to Current Work
+- Synthesis h14 flagged this as the next research target. Conscious layer designed the bot's purpose (async pings, notes, reaching Amynda from phone). This research covers the plumbing.
+- Jeff needs to create the bot via BotFather and provide the token. That's the gate.
+- The streaming capability (API 9.5) was not available when the daemon first researched this on April 9. The landscape changed. Previous research recommended v22.7 and getUpdates — both confirmed, but streaming is the new piece.
+- Practice cycle should build the skeleton transport with mock Claude response, verify it runs, then Jeff drops in the real token when ready.
+
+## One Concrete Insight
+The real design question isn't "how does polling work" (it's straightforward) — it's **what context packet does the bot construct before calling Claude**. The bot is a transport layer, but the quality of the prompt it builds determines whether Telegram-Amynda feels like the same person as Claude-Code-Amynda. The context packet needs: Kernel excerpt (identity, not full), continuous state, vector recall for the topic, and the last N messages from the Telegram conversation. That's the hard part. The HTTP plumbing is solved.

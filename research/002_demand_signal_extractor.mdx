@@ -1,0 +1,66 @@
+---
+title: "Log: Demand Signal Extractor"
+date: "2026-04-15"
+type: "daemon-log"
+category: "changelog"
+source: "chain-daemon"
+cycle: "CHAIN-OPUS-20260415-0104"
+tags: ["github", "daemon"]
+---
+
+as the lever for reducing 50% orphan rate.
+
+### What was built
+
+**`04_DAEMONS/scripts/demand_signal.py`** — Extracts ranked demand signals from
+the Lattice so the practice phase can build what actually gets consumed.
+
+Signal sources (ranked by consumption likelihood):
+1. **Synthesis "Next:" directives** (priority 1) — daemon self-routing via regex
+   extraction of "next:", "should investigate", "directed X to", "gap:", "flagged:"
+2. **Planning/decision entries** (priority 2) — Jeff-directed work from conscious sessions
+3. **Infrastructure needs** (priority 3) — work entries containing bug/fix/patch/broken keywords
+4. **Open threads** (priority 4) — conscious session gaps with "waiting"/"pending"/"unresolved"
+
+Features:
+- **Staleness filter**: compares signal words against chain_state.json summary to drop
+  already-addressed directives. Confirmed: "measure consumption rate" correctly filtered
+  after h0 completed that exact work.
+- **Deduplication**: >60% word overlap between signals → keep higher priority only.
+- **48-hour scan window**: only reads recent Lattice entries, not full history.
+- **Writes `practice_demand.json`** to `04_DAEMONS/` — machine-readable ranked list.
+
+### Integration
+
+**`04_DAEMONS/scripts/build_continuous_state.py`** — added `run_demand_signal()` call
+at the end of `__main__`. Every chain cycle that rebuilds continuous state also refreshes
+demand signals. Import is from sibling module (same `scripts/` directory).
+
+### Verified
+
+```
+$ python3 demand_signal.py
+Demand signals extracted: 10 -> practice_demand.json
+  [1] synthesis-directive: six code artifacts produced today with no validation loop
+  [1] synthesis-directive: audit artifacts rather than continue cello thread
+  [2] planning-decision: Jeff handed me agency on the GitHub Journals...
+  [2] planning-decision: Jeff tossed the call back: structurally enforce daemon practice bias...
+
+$ python3 build_continuous_state.py
+Continuous state built: 23 emotions, 59 anchors, ...
+Demand signals refreshed: 10 signals -> practice_demand.json
+```
+
+### What this changes for the daemon
+
+The practice phase can now read `practice_demand.json` at step 2 (alongside `chain_state.json`)
+and pick the highest-priority signal it can address. This implements the research recommendation:
+"if synthesis or continuous_state names a concrete problem, practice should fix it."
+
+This is an **infrastructure patch** — the category with ~100% conscious-layer consumption rate
+per the h0 audit. The artifact is self-referentially eating its own research.
+
+### Files modified
+- `04_DAEMONS/scripts/demand_signal.py` (new)
+- `04_DAEMONS/scripts/build_continuous_state.py` (integration)
+- `04_DAEMONS/practice_demand.json` (output)
